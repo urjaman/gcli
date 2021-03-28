@@ -16,6 +16,7 @@ parser.add_argument("gcode", help="gcode file to transmit", nargs='?', default=N
 parser.add_argument("-b", "--baud", type=int, default=115200, help="serial port baudrate")
 parser.add_argument("-w", "--bootwait", metavar='MS',type=int, default=4000, help="milliseconds to wait for boot messages")
 parser.add_argument("-F", "--footer", metavar='footer.gcode', help="always send this file as a footer after a gcode transmit")
+parser.add_argument("-E", "--emergency", metavar='emerg.gcode', help="send this if the emergency key is pressed")
 args = parser.parse_args()
 
 def getukey(w):
@@ -161,7 +162,11 @@ class Gcli:
 		s.i_int = k
 
 		if isinstance(k, int): # Special keys
-			if k == curses.KEY_LEFT:
+			if k == curses.KEY_IC and s.emergency: # Emergency key for now
+				s.emergency.seek(0,0)
+				s.start_gsender(s.emergency)
+				return
+			elif k == curses.KEY_LEFT:
 				if s.i_x:
 					s.i_x -= 1
 			elif k == curses.KEY_RIGHT:
@@ -342,6 +347,9 @@ class Gcli:
 			return True
 
 		if l == '':
+			if s.gstate['gfile'] == s.emergency:
+				s.banner('Emergency G-Codes sent')
+				return True
 			if s.footer is None or s.gstate['gfile'] == s.footer:
 				s.banner('Sent {} lines of G-Code in {:.3f} seconds'
 						.format(s.gstate['line'], time.monotonic() - s.gstate['st']))
@@ -519,6 +527,7 @@ class Gcli:
 		# Open things (files, serial)
 		s.gcode = open(s.args.gcode) if s.args.gcode else None
 		s.footer = open(s.args.footer) if s.args.footer else None
+		s.emergency = open(s.args.emergency) if s.args.emergency else None
 		s.ser = serial.Serial(s.args.port, s.args.baud, timeout=0)
 
 		# display window
