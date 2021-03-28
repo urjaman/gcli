@@ -1,8 +1,8 @@
 ## gcli.py
 
-Hey, if you've got a better snazzy name, lmk.
+Hey, if you've got a better snazzy name, lmk.  
 Anyways this thing is a line-oriented serial port monitor and G-Code sender,
-aimed for 3D printers or whatnot - my Anet A8 was the test target.
+aimed for 3D printers or whatnot - my Anet A8 was the test target.  
 It knows to wait for the target to boot and stop chattering before sending
 the G-Code file (and well, that does involve waiting for ok responses too.).
 
