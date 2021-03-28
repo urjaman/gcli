@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# See file named COPYING in the source distribution for license terms (MIT).
+
 import serial
 import os
 import sys
