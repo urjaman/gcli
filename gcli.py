@@ -52,7 +52,6 @@ def getukey(w):
 class Gcli:
 	# "self" is too long for my weak fingers, s it shall be
 
-
 	def __init__(s, args):
 		s.args = args
 		s.bootwait = args.bootwait / 1000
@@ -88,8 +87,7 @@ class Gcli:
 
 	def fn_complete(s, pfx):
 		(head, tail) = os.path.split(pfx)
-		if head == '':
-			head = '.'
+		head = '.' if head == '' else head
 
 		gcodes = []
 		dirs = []
@@ -229,6 +227,8 @@ class Gcli:
 
 
 	def resume_gsender(s):
+		if s.gstate is None:
+			return
 		s.gstate['paused'] = False
 		s.gstate['waitok'] = False
 		s.i_int = None
@@ -276,20 +276,16 @@ class Gcli:
 			s.recdata = b''
 
 
-	def waitio(s, timeout, doread = True):
-		rv = False
+	def waitio(s, timeout):
 		input = False
 		(r,_,_) = select.select([s.ser,sys.stdin],[],[], timeout)
 		for f in r:
 			if f is s.ser:
-				if doread:
-					d = s.ser.read(4096)
-					if len(d):
-						s.bt = time.monotonic()
-						s.outputprocess(d)
-						rv = True
-				else:
-					rv = True
+				d = s.ser.read(4096)
+				if len(d):
+					s.last_receive = time.monotonic()
+					s.outputprocess(d)
+
 			if f is sys.stdin:
 				input = True
 
@@ -297,15 +293,14 @@ class Gcli:
 			s.inputprocess()
 
 		if len(s.recdata):
-			t = time.monotonic() - s.bt
+			t = time.monotonic() - s.last_receive
 			if t > 1.0:
 				flush_recdata()
 
-		return rv
 
 
 	def bootwaiter(s):
-		rt = (s.bt + s.bootwait) - time.monotonic()
+		rt = (s.last_receive + s.bootwait) - time.monotonic()
 		if rt <= 0:
 			return True
 
@@ -396,17 +391,6 @@ class Gcli:
 		s.message(str, '= ', s.info_attr)
 
 
-	cmds = (
-		( ( 'q', 'quit', 'exit' ), "Quit. Duh." ),
-		( ( 'c', 'cont', 'continue', 'resume' ), "Continue sending G-Code." ),
-		( ( 're', 'resend' ), "Resend current g-code file from beginning." ),
-		( ( 'f', 'file', 'send' ), "open and send a g-code file by filename." ),
-		( ( 'setfooter', ), "Set g-code file to be used as a footer." ),
-		( ( 'sf', 'sendfooter'), "Send (only) the footer file." ),
-		( ( '?', 'h', 'help' ), "This thing..." )
-		)
-
-
 	def open_or_usage(s, cs, name):
 		if len(cs) < 2:
 			s.infomessage('usage: ' + cs[0] + ' ' + name)
@@ -421,60 +405,91 @@ class Gcli:
 		return f
 
 
+	class Cmd:
+		list = [] # intentionally shared list of commands
+		def __init__(s, names, func, h, params=0):
+			s.names = names
+			s.help = h
+			s.run = func
+			s.params = params
+			s.list.append(s)
+
+
+	def cmd_resend(s):
+		if s.gcode:
+			s.gcode.seek(0, 0)
+			s.start_gsender(s.gcode)
+		else:
+			s.huhmessage('No gcode file to resend')
+
+
+	def cmd_send(s, cs):
+		f = s.open_or_usage(cs, '<filename.gcode>')
+		if f is False:
+			return False
+
+		if s.gcode:
+			s.gcode.close()
+
+		s.gcode = f
+		s.start_gsender(s.gcode)
+
+
+	def cmd_setfooter(s, cs):
+		f = s.open_or_usage(cs, '<footer.gcode>')
+		if f is False:
+			return False
+
+		if s.footer:
+			s.footer.close()
+
+		s.footer = f
+		s.huhmessage("footer: " + cs[1])
+
+
+	def cmd_sendfooter(s):
+		if s.footer is None:
+			s.huhmessage("No footer to send (use setfooter)")
+			return False
+
+		s.footer.seek(0,0)
+		s.start_gsender(s.footer)
+
+
+	def cmd_help(s):
+		s.infomessage('Command list:')
+		for c in s.Cmd.list:
+			str = ''
+			for n in c.names:
+				if str:
+					str += ' / '
+				str += n
+			str += ': '
+			str += c.help
+			s.infomessage(str)
+		s.infomessage('Capitalized commands are sent to the remote device.')
+
+
+	Cmd(( 'q', 'quit', 'exit' ), lambda s: True, "Quit. Duh." )
+	Cmd(( 'c', 'cont', 'continue', 'resume' ), resume_gsender, "Continue sending G-Code." )
+	Cmd(( 're', 'resend' ), cmd_resend, "Resend current g-code file from beginning." )
+	Cmd(( 'f', 'file', 'send' ), cmd_send, params=1, h="open and send a g-code file by filename." )
+	Cmd(( 'setfooter', ), cmd_setfooter, params=1, h="Set g-code file to be used as a footer." )
+	Cmd(( 'sf', 'sendfooter'), cmd_sendfooter, "Send (only) the footer file." )
+	Cmd(( '?', 'h', 'help' ), cmd_help,  "This thing..." )
+
+
 	def commandparser(s, cmd):
 		cs = cmd.split(maxsplit=1)
-		if cmd in s.cmds[0][0]: # quit
-			return True
-		elif cmd in s.cmds[1][0]: # continue
-			if s.gstate:
-				s.resume_gsender()
-		elif cmd in s.cmds[2][0]: # resend
-			if s.gcode:
-				s.gcode.seek(0, 0)
-				s.start_gsender(s.gcode)
+		for c in s.Cmd.list:
+			if c.params:
+				if cs[0] in c.names:
+					return c.run(s, cs)
 			else:
-				s.huhmessage('No gcode file to resend')
-		elif cs[0] in s.cmds[3][0]: # file / send
-			f = s.open_or_usage(cs, '<filename.gcode>')
-			if f is False:
-				return False
+				if cmd in c.names:
+					return c.run(s)
 
-			if s.gcode:
-				s.gcode.close()
-
-			s.gcode = f
-			s.start_gsender(s.gcode)
-		elif cs[0] in s.cmds[4][0]: # footer
-			f = s.open_or_usage(cs, '<footer.gcode>')
-			if f is False:
-				return False
-
-			if s.footer:
-				s.footer.close()
-
-			s.footer = f
-			s.huhmessage("footer: " + cs[1])
-		elif cmd in s.cmds[5][0]: # send footer
-			if s.footer is None:
-				s.huhmessage("No footer to send (use setfooter)")
-				return False
-
-			s.footer.seek(0,0)
-			s.start_gsender(s.footer)
-		elif cmd in s.cmds[len(s.cmds)-1][0]: # help
-			s.infomessage('Command list:')
-			for c in s.cmds:
-				str = ''
-				for n in c[0]:
-					if str:
-						str += ' / '
-					str += n
-				str += ': '
-				str += c[1]
-				s.infomessage(str)
-			s.infomessage('Capitalized commands are sent to the remote device.')
-		else:
-			s.huhmessage('Unknown command: ' + cmd)
+		s.huhmessage('Unknown command: ' + cmd)
 		return False
 
 
@@ -501,16 +516,9 @@ class Gcli:
 			s.huh_attr = 0
 			s.info_attr = 0
 
-		if s.args.gcode:
-			s.gcode = open(s.args.gcode)
-		else:
-			s.gcode = None
-
-		if s.args.footer:
-			s.footer = open(s.args.footer)
-		else:
-			s.footer = None
-
+		# Open things (files, serial)
+		s.gcode = open(s.args.gcode) if s.args.gcode else None
+		s.footer = open(s.args.footer) if s.args.footer else None
 		s.ser = serial.Serial(s.args.port, s.args.baud, timeout=0)
 
 		# display window
@@ -538,7 +546,8 @@ class Gcli:
 		s.i_eh = [''] # "Editable history", as in the current line editing context
 		s.i_y = 0 # Eh "Y coordinate" (list position)
 		s.i_x = 0 # Cursor position on the current eh line
-		s.bt = time.monotonic()
+
+		s.last_receive = time.monotonic()
 		s.action = None
 
 		if s.gcode:
