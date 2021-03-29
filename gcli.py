@@ -16,7 +16,7 @@ parser.add_argument("gcode", help="gcode file to transmit", nargs='?', default=N
 parser.add_argument("-b", "--baud", type=int, default=115200, help="serial port baudrate")
 parser.add_argument("-w", "--bootwait", metavar='MS',type=int, default=4000, help="milliseconds to wait for boot messages")
 parser.add_argument("-F", "--footer", metavar='footer.gcode', help="always send this file as a footer after a gcode transmit")
-parser.add_argument("-E", "--emergency", metavar='emerg.gcode', help="send this if the emergency key is pressed")
+parser.add_argument("-E", "--emergency", metavar='emerg.gcode', help="send this if the Insert key is pressed (emergency stop)")
 args = parser.parse_args()
 
 def getukey(w):
@@ -49,6 +49,33 @@ def getukey(w):
 		return bs.decode('utf-8')
 
 	return chr(k)
+
+class GCodeFile:
+	def __init__(s, filename, identity, next=None):
+		s.identity = identity
+		s.next = next
+		s.f = open(filename) if filename else None
+
+	def __bool__(s):
+		return True if s.f else False
+
+	def open(s, fn):
+		try:
+			nf = open(fn)
+		except OSError:
+			return False
+		if s.f:
+			s.f.close()
+		s.f = nf
+		return True
+
+	def reset(s):
+		s.f.seek(0,0)
+
+	def readline(s):
+		return s.f.readline()
+
+
 
 class Gcli:
 	# "self" is too long for my weak fingers, s it shall be
@@ -147,6 +174,14 @@ class Gcli:
 		s.iw.redrawwin()
 		s.full_refresh()
 
+
+	def send_emergency(s):
+		if not s.emergency:
+			s.huhmessage('No emergency gcode file to send')
+			return
+		s.start_gsender(s.emergency, msg='Sending Emergency G-Code')
+		s.gcodesender() # send first line NOW
+
 	# keyboard input
 	def inputprocess(s):
 		k = getukey(s.iw)
@@ -162,9 +197,8 @@ class Gcli:
 		s.i_int = k
 
 		if isinstance(k, int): # Special keys
-			if k == curses.KEY_IC and s.emergency: # Emergency key for now
-				s.emergency.seek(0,0)
-				s.start_gsender(s.emergency)
+			if k == curses.KEY_IC and s.emergency:
+				s.send_emergency()
 				return
 			elif k == curses.KEY_LEFT:
 				if s.i_x:
@@ -312,7 +346,7 @@ class Gcli:
 		if rt > 0.5:
 			rt = 0.5
 
-		s.waitio(rt)
+		s.select_to = rt
 		return False
 
 
@@ -324,12 +358,6 @@ class Gcli:
 
 
 	def gcodesender(s):
-		timeout = 0
-		if s.gstate['waitok'] or s.gstate['paused']:
-			timeout = 0.5
-
-		s.waitio(timeout)
-
 		if s.gstate['paused']:
 			return False
 
@@ -347,18 +375,15 @@ class Gcli:
 			return True
 
 		if l == '':
-			if s.gstate['gfile'] == s.emergency:
-				s.banner('Emergency G-Codes sent')
-				return True
-			if s.footer is None or s.gstate['gfile'] == s.footer:
+			s.gstate['gfile'] = s.gstate['gfile'].next
+			if s.gstate['gfile']:
+				s.infomessage(s.gstate['gfile'].identity + ' =')
+				s.gstate['gfile'].reset()
+				return false
+			else:
 				s.banner('Sent {} lines of G-Code in {:.3f} seconds'
 						.format(s.gstate['line'], time.monotonic() - s.gstate['st']))
 				return True
-			else:
-				s.infomessage('footer =')
-				s.footer.seek(0,0)
-				s.gstate['gfile'] = s.footer
-				return False
 
 		l = l.rsplit(sep=';',maxsplit=1)[0].rstrip()
 		if len(l) == 0:
@@ -369,9 +394,13 @@ class Gcli:
 		s.gstate['line'] += 1
 
 
-	def start_gsender(s, gcode, flushint=True):
-		s.banner('Sending G-Code')
+	def start_gsender(s, gcode, flushint=True, msg='Sending G-Code'):
+		if not gcode:
+			s.huhmessage('No ' + gcode.identity + ' file to (re)send')
+			return
+		s.banner(msg)
 		# gcodesender state
+		gcode.reset()
 		s.gstate = { 'paused': False, 'waitok': False, 'gfile': gcode, 'line': 0, 'st': time.monotonic() }
 		s.flush_recdata()
 		s.set_prompt('! ')
@@ -399,19 +428,6 @@ class Gcli:
 		s.message(str, '= ', s.info_attr)
 
 
-	def open_or_usage(s, cs, name):
-		if len(cs) < 2:
-			s.infomessage('usage: ' + cs[0] + ' ' + name)
-			return False
-
-		try:
-			f = open(cs[1])
-		except (FileNotFoundError, OSError):
-			s.errmessage('Could not open "' + cs[1] + '"')
-			return False
-
-		return f
-
 
 	class Cmd:
 		list = [] # intentionally shared list of commands
@@ -423,45 +439,17 @@ class Gcli:
 			s.list.append(s)
 
 
-	def cmd_resend(s):
-		if s.gcode:
-			s.gcode.seek(0, 0)
-			s.start_gsender(s.gcode)
+	def cmd_open(s, f, cs, name, send=False):
+		if len(cs) < 2:
+			s.infomessage('usage: ' + cs[0] + ' ' + name)
+			return
+
+		if f.open(cs[1]):
+			s.infomessage(f.identity + ': ' + cs[1])
+			if send:
+				s.start_gsender(f)
 		else:
-			s.huhmessage('No gcode file to resend')
-
-
-	def cmd_send(s, cs):
-		f = s.open_or_usage(cs, '<filename.gcode>')
-		if f is False:
-			return False
-
-		if s.gcode:
-			s.gcode.close()
-
-		s.gcode = f
-		s.start_gsender(s.gcode)
-
-
-	def cmd_setfooter(s, cs):
-		f = s.open_or_usage(cs, '<footer.gcode>')
-		if f is False:
-			return False
-
-		if s.footer:
-			s.footer.close()
-
-		s.footer = f
-		s.huhmessage("footer: " + cs[1])
-
-
-	def cmd_sendfooter(s):
-		if s.footer is None:
-			s.huhmessage("No footer to send (use setfooter)")
-			return False
-
-		s.footer.seek(0,0)
-		s.start_gsender(s.footer)
+			s.errmessage('Could not open "' + cs[1] + '"')
 
 
 	def cmd_help(s):
@@ -480,10 +468,16 @@ class Gcli:
 
 	Cmd(( 'q', 'quit', 'exit' ), lambda s: True, "Quit. Duh." )
 	Cmd(( 'c', 'cont', 'continue', 'resume' ), resume_gsender, "Continue sending G-Code." )
-	Cmd(( 're', 'resend' ), cmd_resend, "Resend current g-code file from beginning." )
-	Cmd(( 'f', 'file', 'send' ), cmd_send, params=1, h="open and send a g-code file by filename." )
-	Cmd(( 'setfooter', ), cmd_setfooter, params=1, h="Set g-code file to be used as a footer." )
-	Cmd(( 'sf', 'sendfooter'), cmd_sendfooter, "Send (only) the footer file." )
+	Cmd(( 're', 'resend' ), lambda s: s.start_gsender(s.gcode), "Resend current g-code file from beginning." )
+	Cmd(( 'f', 'file', 'send' ), lambda s, cs: s.cmd_open(s.gcode,  cs, '<filename.gcode>',True), params=1,
+		h="open and send a g-code file by filename." )
+	Cmd(( 'e', ), lambda s: s.send_emergency(), h="send the emergency g-code")
+	Cmd(( 'setemergency', ), lambda s, cs: s.cmd_open(s.emergency, cs, '<emergency.gcode>'), params=1,
+		h="Set g-code file for emergency stop (Insert key or 'e' command)" )
+	Cmd(( 'setfooter', ), lambda s, cs: s.cmd_open(s.footer, cs, '<footer.gcode>'), params=1,
+		h="Set g-code file to be used as a footer." )
+	Cmd(( 'sf', 'sendfooter'), lambda s: s.start_gsender(s.footer),
+		"Send (only) the footer file." )
 	Cmd(( '?', 'h', 'help' ), cmd_help,  "This thing..." )
 
 
@@ -525,9 +519,9 @@ class Gcli:
 			s.info_attr = 0
 
 		# Open things (files, serial)
-		s.gcode = open(s.args.gcode) if s.args.gcode else None
-		s.footer = open(s.args.footer) if s.args.footer else None
-		s.emergency = open(s.args.emergency) if s.args.emergency else None
+		s.footer = GCodeFile(s.args.gcode, 'footer')
+		s.gcode = GCodeFile(s.args.gcode, 'gcode', s.footer)
+		s.emergency = GCodeFile(s.args.emergency, 'emergency')
 		s.ser = serial.Serial(s.args.port, s.args.baud, timeout=0)
 
 		# display window
@@ -556,8 +550,11 @@ class Gcli:
 		s.i_y = 0 # Eh "Y coordinate" (list position)
 		s.i_x = 0 # Cursor position on the current eh line
 
+		default_select_to = 0.5
+
 		s.last_receive = time.monotonic()
 		s.action = None
+		s.select_to = default_select_to
 
 		if s.gcode:
 			s.banner('Waiting for device boot')
@@ -572,6 +569,7 @@ class Gcli:
 		while True: # main action loop
 			if s.action:
 				if s.action():
+					s.select_to = default_select_to
 					if s.action == s.bootwaiter:
 						s.start_gsender(s.gcode, False)
 						s.echo_attr |= curses.A_BOLD
@@ -579,9 +577,8 @@ class Gcli:
 						s.action = None
 						s.gstate = None
 						s.set_prompt('> ')
-			else:
-				s.waitio(0.5)
 
+			s.waitio(s.select_to)
 			if s.i_out:
 				os = s.i_out
 				s.i_out = None
