@@ -15,6 +15,7 @@ parser.add_argument("port", help="serial port device")
 parser.add_argument("gcode", help="gcode file to transmit", nargs='?', default=None)
 parser.add_argument("-b", "--baud", type=int, default=115200, help="serial port baudrate")
 parser.add_argument("-w", "--bootwait", metavar='MS',type=int, default=4000, help="milliseconds to wait for boot messages")
+parser.add_argument("-H", "--header", metavar='header.gcode', help="always send this file as a header before a gcode transmit")
 parser.add_argument("-F", "--footer", metavar='footer.gcode', help="always send this file as a footer after a gcode transmit")
 parser.add_argument("-E", "--emergency", metavar='emerg.gcode', help="send this if the Insert key is pressed (emergency stop)")
 args = parser.parse_args()
@@ -50,7 +51,11 @@ def getukey(w):
 
 	return chr(k)
 
+
+
 class GCodeFile:
+	# i use "s" for self
+
 	def __init__(s, filename, identity, next=None):
 		s.identity = identity
 		s.next = next
@@ -76,10 +81,7 @@ class GCodeFile:
 		return s.f.readline()
 
 
-
 class Gcli:
-	# "self" is too long for my weak fingers, s it shall be
-
 	def __init__(s, args):
 		s.args = args
 		s.bootwait = args.bootwait / 1000
@@ -337,7 +339,6 @@ class Gcli:
 				flush_recdata()
 
 
-
 	def bootwaiter(s):
 		rt = (s.last_receive + s.bootwait) - time.monotonic()
 		if rt <= 0:
@@ -379,7 +380,7 @@ class Gcli:
 			if s.gstate['gfile']:
 				s.infomessage(s.gstate['gfile'].identity + ' =')
 				s.gstate['gfile'].reset()
-				return false
+				return False
 			else:
 				s.banner('Sent {} lines of G-Code in {:.3f} seconds'
 						.format(s.gstate['line'], time.monotonic() - s.gstate['st']))
@@ -398,6 +399,11 @@ class Gcli:
 		if not gcode:
 			s.huhmessage('No ' + gcode.identity + ' file to (re)send')
 			return
+
+		# Automatically substitute s.header for s.gcode if provided
+		if s.header and s.header.next is gcode:
+			gcode = s.header
+
 		s.banner(msg)
 		# gcodesender state
 		gcode.reset()
@@ -426,7 +432,6 @@ class Gcli:
 
 	def infomessage(s, str):
 		s.message(str, '= ', s.info_attr)
-
 
 
 	class Cmd:
@@ -474,6 +479,8 @@ class Gcli:
 	Cmd(( 'e', ), lambda s: s.send_emergency(), h="send the emergency g-code")
 	Cmd(( 'setemergency', ), lambda s, cs: s.cmd_open(s.emergency, cs, '<emergency.gcode>'), params=1,
 		h="Set g-code file for emergency stop (Insert key or 'e' command)" )
+	Cmd(( 'setheader', ), lambda s, cs: s.cmd_open(s.header, cs, '<header.gcode>'), params=1,
+		h="Set g-code file to be used as a header." )
 	Cmd(( 'setfooter', ), lambda s, cs: s.cmd_open(s.footer, cs, '<footer.gcode>'), params=1,
 		h="Set g-code file to be used as a footer." )
 	Cmd(( 'sf', 'sendfooter'), lambda s: s.start_gsender(s.footer),
@@ -519,8 +526,9 @@ class Gcli:
 			s.info_attr = 0
 
 		# Open things (files, serial)
-		s.footer = GCodeFile(s.args.gcode, 'footer')
+		s.footer = GCodeFile(s.args.footer, 'footer')
 		s.gcode = GCodeFile(s.args.gcode, 'gcode', s.footer)
+		s.header = GCodeFile(s.args.header, 'header', s.gcode)
 		s.emergency = GCodeFile(s.args.emergency, 'emergency')
 		s.ser = serial.Serial(s.args.port, s.args.baud, timeout=0)
 
