@@ -476,7 +476,7 @@ class Gcli:
 	Cmd(( 're', 'resend' ), lambda s: s.start_gsender(s.gcode), "Resend current g-code file from beginning." )
 	Cmd(( 'f', 'file', 'send' ), lambda s, cs: s.cmd_open(s.gcode,  cs, '<filename.gcode>',True), params=1,
 		h="open and send a g-code file by filename." )
-	Cmd(( 'e', ), lambda s: s.send_emergency(), h="send the emergency g-code")
+	Cmd(( 'e', ), send_emergency, h="send the emergency g-code")
 	Cmd(( 'setemergency', ), lambda s, cs: s.cmd_open(s.emergency, cs, '<emergency.gcode>'), params=1,
 		h="Set g-code file for emergency stop (Insert key or 'e' command)" )
 	Cmd(( 'setheader', ), lambda s, cs: s.cmd_open(s.header, cs, '<header.gcode>'), params=1,
