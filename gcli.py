@@ -52,7 +52,6 @@ def getukey(w):
 	return chr(k)
 
 
-
 class GCodeFile:
 	# i use "s" for self
 
@@ -81,45 +80,80 @@ class GCodeFile:
 		return s.f.readline()
 
 
-class Gcli:
-	def __init__(s, args):
-		s.args = args
-		s.bootwait = args.bootwait / 1000
-		s.prompt = '? '
+class InputMethod:
+	def __init__(s, window, prompt, file_suffix, completion_msg, commands, resize=None, emergency=None):
+		s.iw = window
+		s.prompt = prompt
+		s.file_suffix = file_suffix
+		s.msg = completion_msg
+		s.commands = commands
+		s.resize = resize
+		s.emergency = emergency
+
+		# edit context ( a full editable copy of history + current line )
+		s.e = ['']
+		s.x = 0
+		s.y = 0
+		# command history
+		s.history = []
+
+		# Do not wait inside curses
+		s.iw.nodelay(True)
+		# need to enable keypad for this window, wrapper only does it for stdcsr
+		s.iw.keypad(True)
+
+		# outputs: "Interrupt" (last key storage), and the output commandline
+		s.intr = None
+		s.out = None
 
 
 	def cursor_refresh(s):
-		cursx = len(s.prompt) + s.i_x
-		if cursx >= curses.COLS:
-			cursx = curses.COLS - 1
+		(_, cols) = s.iw.getmaxyx()
+		cursx = len(s.prompt) + s.x
+		if cursx >= cols:
+			cursx = cols - 1
 
 		s.iw.move(0, cursx)
 		s.iw.refresh()
 
 
-	def input_refresh(s):
-		max_len = curses.COLS - len(s.prompt) - 1
+	def redraw(s):
+		(_, cols) = s.iw.getmaxyx()
+		max_len = cols - len(s.prompt) - 1
 		s.iw.addstr(0,0, s.prompt)
-		s.iw.addstr(s.i_eh[s.i_y][:max_len])
+		s.iw.addstr(s.e[s.y][:max_len])
 		s.iw.clrtoeol()
 		s.cursor_refresh()
 
 
-	def full_refresh(s):
-		s.dw.noutrefresh(0,0, 0,0, curses.LINES-2, curses.COLS - 1)
-		s.input_refresh()
+	def set_prompt(s, newprompt):
+		s.prompt = newprompt
+		s.redraw()
 
+	def choose_complete(s, prefix, list):
+		list = [e for e in list if e.startswith(prefix)]
+		if len(list) == 0:
+			return ''
 
-	def dw_refresh(s):
-		s.dw.noutrefresh(0,0, 0,0, curses.LINES-2, curses.COLS - 1)
-		s.cursor_refresh()
+		if len(list) == 1:
+			return list[0][len(prefix):]
+
+		m = ''
+		for name in list:
+			if m:
+				m += ' '
+			m += name
+
+		s.msg(m)
+		pfx = os.path.commonprefix(list)
+		return pfx[len(prefix):]
 
 
 	def fn_complete(s, pfx):
 		(head, tail) = os.path.split(pfx)
-		head = '.' if head == '' else head
+		head = head if head else '.'
 
-		gcodes = []
+		special = []
 		dirs = []
 		other = []
 		try:
@@ -127,39 +161,112 @@ class Gcli:
 				for e in it:
 					if e.name.startswith(tail):
 						if e.is_file():
-							if e.name.endswith(".gcode"):
-								gcodes.append(e)
+							if e.name.endswith(s.file_suffix):
+								special.append(e.name)
 							else:
-								other.append(e)
+								other.append(e.name)
 						elif e.is_dir():
-							dirs.append(e)
+							dirs.append(e.name + os.path.sep)
 						else:
-							other.append(e)
+							other.append(e.name)
 		except OSError:
 			pass
-		for list in (gcodes, dirs, other):
+		for list in (special, dirs, other):
 			if len(list) == 0:
 				continue
 
-			if len(list) == 1:
-				d = ''
-				if list[0].is_dir():
-					d = '/'
-				return list[0].name[len(tail):] + d
-
-			m = ''
-			for e in list:
-				if m:
-					m += ' '
-				m += e.name
-				if e.is_dir():
-					m += '/'
-
-			s.huhmessage(m)
-			pfx = os.path.commonprefix([e.name for e in list])
-			return pfx[len(tail):]
+			return s.choose_complete(tail, list)
 
 		return ''
+
+
+	# keyboard input
+	def process(s):
+		k = getukey(s.iw)
+		if not k:
+			return
+
+		if k == curses.KEY_RESIZE:
+			if s.resize:
+				s.resize()
+			return
+
+		# This is used to pause/interrupt "stuff" (gcode transmit now) on any key
+		# except resize, because that's not a key lol
+		s.intr = k
+
+		e, x, y = s.e, s.x, s.y
+
+		if isinstance(k, int): # Special keys
+			if k == curses.KEY_IC and s.emergency:
+				s.emergency()
+				return
+			elif k == curses.KEY_LEFT:
+				if x:
+					x -= 1
+			elif k == curses.KEY_RIGHT:
+				x += 1
+				if x > len(e[y]):
+					x = len(e[y])
+			elif k == curses.KEY_DC:
+				e[y] = e[y][:x] + e[y][x+1:]
+			elif k == curses.KEY_HOME:
+				x = 0
+			elif k == curses.KEY_END:
+				x = len(e[y])
+			elif k == curses.KEY_UP:
+				if y:
+					y -= 1
+					x = len(e[y])
+			elif k == curses.KEY_DOWN:
+				if y < len(e)-1:
+					s.i_y += 1
+					x = len(e[y])
+
+		else:
+			if k == '\t' and x == len(e[y]): # Tab completion (filenames, commands)
+				if ' ' in e[y]:
+					cs = e[y].split(maxsplit=1)
+					if len(cs) == 2 and len(cs[1]) and cs[0][0].islower():
+						e[y] += s.fn_complete(cs[1])
+				else:
+					e[y] += s.choose_complete(e[y], s.commands)
+
+				x = len(e[y])
+			elif k == '\n':
+				if len(e[y]):
+					s.out = e[y]
+					if len(s.history) == 0 or s.history[-1] != s.out:
+						s.history.append(s.out)
+					y = len(s.history)
+					e = s.history[:] + ['']
+					x = 0
+			elif k == chr(127) or k == chr(8):
+				if x:
+					e[y] = e[y][:x-1] + e[y][x:]
+					x -= 1
+			elif ord(k) >= 32:
+				e[y] = e[y][:x] + k + e[y][x:]
+				x += 1
+
+		s.e, s.x, s.y = e, x, y
+		s.redraw()
+
+
+class Gcli:
+	def __init__(s, args):
+		s.args = args
+		s.bootwait = args.bootwait / 1000
+
+
+	def full_refresh(s):
+		s.dw.noutrefresh(0,0, 0,0, curses.LINES-2, curses.COLS - 1)
+		s.i.redraw()
+
+
+	def dw_refresh(s):
+		s.dw.noutrefresh(0,0, 0,0, curses.LINES-2, curses.COLS - 1)
+		s.i.cursor_refresh()
 
 
 	def resize(s):
@@ -184,70 +291,6 @@ class Gcli:
 		s.start_gsender(s.emergency, msg='Sending Emergency G-Code')
 		s.gcodesender() # send first line NOW
 
-	# keyboard input
-	def inputprocess(s):
-		k = getukey(s.iw)
-		if not k:
-			return
-
-		if k == curses.KEY_RESIZE:
-			s.resize()
-			return
-
-		# This is used to pause/interrupt "stuff" (gcode transmit now) on any key
-		# except resize, because that's not a key lol
-		s.i_int = k
-
-		if isinstance(k, int): # Special keys
-			if k == curses.KEY_IC and s.emergency:
-				s.send_emergency()
-				return
-			elif k == curses.KEY_LEFT:
-				if s.i_x:
-					s.i_x -= 1
-			elif k == curses.KEY_RIGHT:
-				s.i_x += 1
-				if s.i_x > len(s.i_eh[s.i_y]):
-					s.i_x = len(s.i_eh[s.i_y])
-			elif k == curses.KEY_DC:
-				s.i_eh[s.i_y] = s.i_eh[s.i_y][:s.i_x] + s.i_eh[s.i_y][s.i_x+1:]
-			elif k == curses.KEY_HOME:
-				s.i_x = 0
-			elif k == curses.KEY_END:
-				s.i_x = len(s.i_eh[s.i_y])
-			elif k == curses.KEY_UP:
-				if s.i_y:
-					s.i_y -= 1
-					s.i_x = len(s.i_eh[s.i_y])
-			elif k == curses.KEY_DOWN:
-				if s.i_y < len(s.i_eh)-1:
-					s.i_y += 1
-					s.i_x = len(s.i_eh[s.i_y])
-
-		else:
-			if k == '\t' and s.i_x == len(s.i_eh[s.i_y]): # Tab filename completion
-				cs = s.i_eh[s.i_y].split(maxsplit=1)
-				if len(cs) == 2 and len(cs[1]) and cs[0][0].islower():
-					s.i_eh[s.i_y] += s.fn_complete(cs[1])
-					s.i_x = len(s.i_eh[s.i_y])
-			elif k == '\n':
-				if len(s.i_eh[s.i_y]):
-					s.i_out = s.i_eh[s.i_y]
-					if len(s.i_history) == 0 or s.i_history[len(s.i_history) - 1] != s.i_out:
-						s.i_history.append(s.i_out)
-					s.i_y = len(s.i_history)
-					s.i_eh = s.i_history[:] + ['']
-					s.i_x = 0
-			elif k == chr(127) or k == chr(8):
-				if s.i_x:
-					s.i_eh[s.i_y] = s.i_eh[s.i_y][:s.i_x - 1] + s.i_eh[s.i_y][s.i_x:]
-					s.i_x -= 1
-			elif ord(k) >= 32:
-				s.i_eh[s.i_y] = s.i_eh[s.i_y][:s.i_x] + k + s.i_eh[s.i_y][s.i_x:]
-				s.i_x += 1
-
-		s.input_refresh()
-
 
 	def banner(s, str):
 		s.dw.attron(s.banner_attr)
@@ -256,15 +299,10 @@ class Gcli:
 		s.dw_refresh()
 
 
-	def set_prompt(s, p):
-		s.prompt = p
-		s.input_refresh()
-
-
 	def pause_gsender(s):
 		s.gstate['paused'] = True
 		s.banner('G-Code Transmit Paused')
-		s.set_prompt('> ')
+		s.i.set_prompt('> ')
 
 
 	def resume_gsender(s):
@@ -272,8 +310,8 @@ class Gcli:
 			return
 		s.gstate['paused'] = False
 		s.gstate['waitok'] = False
-		s.i_int = None
-		s.set_prompt('! ')
+		s.i.intr = None
+		s.i.set_prompt('! ')
 
 	# serial input, display output
 	def outputprocess(s, data):
@@ -331,7 +369,7 @@ class Gcli:
 				input = True
 
 		if input or (timeout and len(r) == 0):
-			s.inputprocess()
+			s.i.process()
 
 		if len(s.recdata):
 			t = time.monotonic() - s.last_receive
@@ -362,7 +400,7 @@ class Gcli:
 		if s.gstate['paused']:
 			return False
 
-		if s.i_int:
+		if s.i.intr:
 			s.pause_gsender()
 			return False
 
@@ -412,7 +450,7 @@ class Gcli:
 		s.set_prompt('! ')
 		s.action = s.gcodesender
 		if flushint:
-			s.i_int = None
+			s.i.intr = None
 
 
 	def message(s, str, pfx, attr):
@@ -539,40 +577,31 @@ class Gcli:
 		s.dw = curses.newpad(curses.LINES - 1, curses.COLS)
 		s.dw.scrollok(True)
 
-		# input window
+		# input window and the input class to (mostly) handle it
+
 		s.iw = curses.newwin(1, curses.COLS, curses.LINES - 1, 0)
-		# Do not wait inside curses
-		s.iw.nodelay(True)
-		# need to enable keypad for this window, wrapper only does it for stdcsr
-		s.iw.keypad(True)
+		# brain-melting way to get list of valid commands
+		commands = [i for e in s.Cmd.list for i in e.names]
+		s.i = InputMethod(s.iw, '? ', '.gcode', s.huhmessage, commands, s.resize, s.send_emergency)
 
 		# gsender state (when running)
 		s.gstate = None
 		# Serial port Received Data buffer
 		s.recdata = b''
-		# Keyboard Input handler variables
-		s.i_int = None
-		s.i_out = None
-		s.i_history = [] # permanent history
-		s.i_eh = [''] # "Editable history", as in the current line editing context
-		s.i_y = 0 # Eh "Y coordinate" (list position)
-		s.i_x = 0 # Cursor position on the current eh line
-
-		default_select_to = 0.5
 
 		s.last_receive = time.monotonic()
 		s.action = None
-		s.select_to = default_select_to
+		s.select_to = default_select_to = 0.5
 
 		if s.gcode:
 			s.banner('Waiting for device boot')
 			s.action = s.bootwaiter
 		else:
 			s.echo_attr |= curses.A_BOLD
-			s.prompt = '> '
+			s.i.set_prompt('> ')
 
 		# Display prompt
-		s.input_refresh()
+		s.i.redraw()
 
 		while True: # main action loop
 			if s.action:
@@ -584,12 +613,12 @@ class Gcli:
 					else:
 						s.action = None
 						s.gstate = None
-						s.set_prompt('> ')
+						s.i.set_prompt('> ')
 
 			s.waitio(s.select_to)
-			if s.i_out:
-				os = s.i_out
-				s.i_out = None
+			if s.i.out:
+				os = s.i.out
+				s.i.out = None
 				if os[0].isupper():
 					s.send_line(os)
 				else:
