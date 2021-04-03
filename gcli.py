@@ -55,9 +55,10 @@ def getukey(w):
 class GCodeFile:
 	# i use "s" for self
 
-	def __init__(s, filename, identity, next=None):
+	def __init__(s, filename, identity, next=None, cl=False):
 		s.identity = identity
 		s.next = next
+		s.autoclose = cl;
 		s.f = open(filename) if filename else None
 
 	def __bool__(s):
@@ -77,7 +78,11 @@ class GCodeFile:
 		s.f.seek(0,0)
 
 	def readline(s):
-		return s.f.readline()
+		l = s.f.readline()
+		if s.autoclose and l == '':
+			s.f.close()
+			s.f = None
+		return l
 
 
 class InputMethod:
@@ -534,6 +539,8 @@ class Gcli:
 		h="Set g-code file to be used as a footer." )
 	Cmd(( 'sf', 'sendfooter'), lambda s: s.start_gsender(s.footer),
 		"Send (only) the footer file." )
+	Cmd(( 'once', ), lambda s, cs: s.cmd_open(s.sendonce, cs, '<once.gcode>', True), params=1,
+		h="send a gcode file by filename once - no header or footer.")
 	Cmd(( '?', 'h', 'help' ), cmd_help,  "This thing..." )
 
 
@@ -581,6 +588,8 @@ class Gcli:
 		s.header = GCodeFile(s.args.header, 'header', s.gcode)
 		s.emergency = GCodeFile(s.args.emergency, 'emergency')
 		s.ser = serial.Serial(s.args.port, s.args.baud, timeout=0)
+
+		s.sendonce = GCodeFile(None, 'sendonce', cl=True)
 
 		# display window
 		# it is a pad to avoid curses resizing it on us and losing the
