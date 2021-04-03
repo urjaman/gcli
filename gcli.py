@@ -130,6 +130,7 @@ class InputMethod:
 		s.prompt = newprompt
 		s.redraw()
 
+
 	def choose_complete(s, prefix, list):
 		list = [e for e in list if e.startswith(prefix)]
 		if len(list) == 0:
@@ -171,6 +172,10 @@ class InputMethod:
 							other.append(e.name)
 		except OSError:
 			pass
+
+		if tail == '..':
+			dirs.append('../')
+
 		for list in (special, dirs, other):
 			if len(list) == 0:
 				continue
@@ -220,7 +225,7 @@ class InputMethod:
 					x = len(e[y])
 			elif k == curses.KEY_DOWN:
 				if y < len(e)-1:
-					s.i_y += 1
+					y += 1
 					x = len(e[y])
 
 		else:
@@ -251,6 +256,12 @@ class InputMethod:
 
 		s.e, s.x, s.y = e, x, y
 		s.redraw()
+
+
+	def output(s):
+		r = s.out
+		s.out = None
+		return r
 
 
 class Gcli:
@@ -447,7 +458,7 @@ class Gcli:
 		gcode.reset()
 		s.gstate = { 'paused': False, 'waitok': False, 'gfile': gcode, 'line': 0, 'st': time.monotonic() }
 		s.flush_recdata()
-		s.set_prompt('! ')
+		s.i.set_prompt('! ')
 		s.action = s.gcodesender
 		if flushint:
 			s.i.intr = None
@@ -509,8 +520,8 @@ class Gcli:
 		s.infomessage('Capitalized commands are sent to the remote device.')
 
 
-	Cmd(( 'q', 'quit', 'exit' ), lambda s: True, "Quit. Duh." )
-	Cmd(( 'c', 'cont', 'continue', 'resume' ), resume_gsender, "Continue sending G-Code." )
+	Cmd(( 'q', 'quit' ), lambda s: True, "Quit. Duh." )
+	Cmd(( 'c', 'continue' ), resume_gsender, "Continue sending G-Code." )
 	Cmd(( 're', 'resend' ), lambda s: s.start_gsender(s.gcode), "Resend current g-code file from beginning." )
 	Cmd(( 'f', 'file', 'send' ), lambda s, cs: s.cmd_open(s.gcode,  cs, '<filename.gcode>',True), params=1,
 		h="open and send a g-code file by filename." )
@@ -529,14 +540,15 @@ class Gcli:
 	def commandparser(s, cmd):
 		cs = cmd.split(maxsplit=1)
 		for c in s.Cmd.list:
-			if c.params:
-				if cs[0] in c.names:
+			if cs[0] in c.names:
+				if c.params:
 					return c.run(s, cs)
-			else:
-				if cmd in c.names:
-					return c.run(s)
+				if len(cs) > 1:
+					s.huhmessage(cs[0] + ' takes no parameters')
+					return
+				return c.run(s)
 
-		s.huhmessage('Unknown command: ' + cmd)
+		s.huhmessage('Unknown command: ' + cs[0])
 		return False
 
 
@@ -580,8 +592,15 @@ class Gcli:
 		# input window and the input class to (mostly) handle it
 
 		s.iw = curses.newwin(1, curses.COLS, curses.LINES - 1, 0)
-		# brain-melting way to get list of valid commands
-		commands = [i for e in s.Cmd.list for i in e.names]
+		# quick, make a list of valid commands
+		commands = []
+		for c in s.Cmd.list:
+			for n in c.names:
+				if c.params:
+					commands.append(n + ' ')
+				else:
+					commands.append(n)
+		commands = [c for c in commands if len(c) > 2]
 		s.i = InputMethod(s.iw, '? ', '.gcode', s.huhmessage, commands, s.resize, s.send_emergency)
 
 		# gsender state (when running)
@@ -616,9 +635,8 @@ class Gcli:
 						s.i.set_prompt('> ')
 
 			s.waitio(s.select_to)
-			if s.i.out:
-				os = s.i.out
-				s.i.out = None
+			os = s.i.output()
+			if os:
 				if os[0].isupper():
 					s.send_line(os)
 				else:
