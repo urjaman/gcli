@@ -144,13 +144,7 @@ class InputMethod:
 		if len(list) == 1:
 			return list[0][len(prefix):]
 
-		m = ''
-		for name in list:
-			if m:
-				m += ' '
-			m += name
-
-		s.msg(m)
+		s.msg(' '.join(list))
 		pfx = os.path.commonprefix(list)
 		return pfx[len(prefix):]
 
