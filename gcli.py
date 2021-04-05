@@ -101,6 +101,8 @@ class InputMethod:
 		s.y = 0
 		# command history
 		s.history = []
+		# visual X: current cursor position
+		s.visx = 0
 
 		# Do not wait inside curses
 		s.iw.nodelay(True)
@@ -113,20 +115,21 @@ class InputMethod:
 
 
 	def cursor_refresh(s):
-		(_, cols) = s.iw.getmaxyx()
-		cursx = len(s.prompt) + s.x
-		if cursx >= cols:
-			cursx = cols - 1
-
-		s.iw.move(0, cursx)
+		s.iw.move(0, s.visx)
 		s.iw.refresh()
 
 
 	def redraw(s):
-		(_, cols) = s.iw.getmaxyx()
-		max_len = cols - len(s.prompt) - 1
-		s.iw.addstr(0,0, s.prompt)
-		s.iw.addstr(s.e[s.y][:max_len])
+		visx = None
+		try:
+			s.iw.addstr(0,0, s.prompt)
+			s.iw.addstr(s.e[s.y][:s.x])
+			(_, visx) = s.iw.getyx()
+			s.iw.addstr(s.e[s.y][s.x:])
+		except curses.error:
+			if not visx:
+				(_, visx) = s.iw.getyx()
+		s.visx = visx
 		s.iw.clrtoeol()
 		s.cursor_refresh()
 
