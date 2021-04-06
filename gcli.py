@@ -617,14 +617,7 @@ class Gcli:
 		# input window and the input class to (mostly) handle it
 		s.iw = curses.newwin(1, curses.COLS, curses.LINES - 1, 0)
 		# quick, make a list of valid commands
-		commands = []
-		for c in s.Cmd.list:
-			for n in c.names:
-				if c.params:
-					commands.append(n + ' ')
-				else:
-					commands.append(n)
-		commands = [c for c in commands if len(c) > 2]
+		commands = [c.names[-1] + c.params * ' ' for c in s.Cmd.list]
 		s.i = InputMethod(s.iw, '? ', '.gcode', s.huhmessage, commands, s.resize, s.send_emergency)
 
 		# gsender state (when running)
