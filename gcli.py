@@ -18,6 +18,7 @@ parser.add_argument("-w", "--bootwait", metavar='MS',type=int, default=4000, hel
 parser.add_argument("-H", "--header", metavar='header.gcode', help="always send this file as a header before a gcode transmit")
 parser.add_argument("-F", "--footer", metavar='footer.gcode', help="always send this file as a footer after a gcode transmit")
 parser.add_argument("-E", "--emergency", metavar='emerg.gcode', help="send this if the Insert key is pressed (emergency stop)")
+parser.add_argument(      "--scrollback", type=int, help="lines of scrollback to remember")
 args = parser.parse_args()
 
 
@@ -56,12 +57,13 @@ def getukey(w):
 class InputMethod:
 	# i use "s" for self
 
-	def __init__(s, window, prompt, file_suffix, completion_msg, commands, resize=None, emergency=None):
+	def __init__(s, window, prompt, file_suffix, completion_msg, commands, scroll=None, resize=None, emergency=None):
 		s.iw = window
 		s.prompt = prompt
 		s.file_suffix = file_suffix
 		s.msg = completion_msg
 		s.commands = commands
+		s.scroll = scroll if scroll else lambda x: None
 		s.resize = resize
 		s.emergency = emergency
 
@@ -199,7 +201,14 @@ class InputMethod:
 				if y < len(e)-1:
 					y += 1
 					x = len(e[y])
-
+			elif k == curses.KEY_SR:
+				s.scroll(-1)
+			elif k == curses.KEY_SF:
+				s.scroll(1)
+			elif k == curses.KEY_PPAGE:
+				s.scroll(-10)
+			elif k == curses.KEY_NPAGE:
+				s.scroll(10)
 		else:
 			if k == '\t' and x == len(e[y]): # Tab completion (filenames, commands)
 				if ' ' in e[y]:
@@ -237,38 +246,66 @@ class InputMethod:
 
 
 class DisplayBox:
-	def __init__(s, w, h, refresh):
+	def __init__(s, w, h, scrollback, refresh):
 		s.w = w
-		s.h = h
 		s.refresh = refresh
 		s.lines = [[]]
+		s.scrollback = scrollback
 
-		s.p = curses.newpad(h, w)
+		s.heights(h)
+		s.p = curses.newpad(s.padh, w)
 		s.p.scrollok(True)
 
-		s.lines_max = 150
-		s.lines_keep = 100
+		s.yoff = 0
+		s.ymax = 0
+
+
+	def heights(s, h):
+		s.h = h
+		s.padh = s.scrollback + h
+		s.lines_keep = s.padh + 25
+		s.lines_max = s.padh + 100
 
 
 	def refreshbox(s, y, x):
-		s.p.noutrefresh(0,0, y,x, y+s.h - 1, x+s.w - 1)
+		s.p.noutrefresh(s.yoff, 0, y,x, y+s.h - 1, x+s.w - 1)
+
+
+	def ymath(s):
+		(y, _) = s.p.getyx()
+		ym = y - (s.h - 1)
+		if ym < 0:
+			ym = 0
+		s.ymax = ym
+		s.yoff = ym
 
 
 	def redraw(s):
 		s.p.move(0,0)
 		s.p.erase()
-		for l in s.lines[-s.h:]:
+		for l in s.lines[-s.padh:]:
 			for str, attr in l:
 				s.p.attron(attr)
 				s.p.addstr(str)
 				s.p.attroff(attr)
 		s.p.redrawwin()
+		s.ymath()
+
+
+	def scroll(s, lines):
+		s.yoff += lines
+		if s.yoff < 0:
+			s.yoff = 0
+		if s.yoff > s.ymax:
+			s.yoff = s.ymax
+
+		s.refresh()
 
 
 	def resize(s, w, h):
 		s.w = w
-		s.h = h
-		s.p.resize(h, w)
+		s.heights(h)
+		s.p.resize(s.padh, w)
 		s.redraw()
 
 	# print(str, [attr=0], [str, attr], ...)
@@ -286,6 +323,7 @@ class DisplayBox:
 			s.p.addstr(str)
 			s.p.attroff(attr)
 
+		s.ymath()
 		s.refresh()
 
 
@@ -328,6 +366,17 @@ class Gcli:
 	def __init__(s, args):
 		s.args = args
 		s.bootwait = args.bootwait / 1000
+		if args.scrollback is None:
+			meminfo = dict((i.split()[0].rstrip(':'),int(i.split()[1])) for i in open('/proc/meminfo').readlines())
+			mem_kib = meminfo['MemTotal']
+			if mem_kib > 500000: # Hardware on which scrollback memory use doesnt really matter
+				s.scrollback = 10000
+			elif mem_kib > 20000: # Smallish
+				s.scrollback = 1000
+			else: # Tiny AF.
+				s.scrollback = 100
+		else:
+			s.scrollback = args.scrollback
 
 
 	def disp_refresh(s):
@@ -608,13 +657,13 @@ class Gcli:
 		s.sendonce = GCodeFile(None, 'sendonce', cl=True)
 
 		# display window/pad class
-		s.d = DisplayBox(curses.COLS, curses.LINES - 1, s.disp_refresh)
+		s.d = DisplayBox(curses.COLS, curses.LINES - 1, s.scrollback, s.disp_refresh)
 
 		# input window and the input class to (mostly) handle it
 		s.iw = curses.newwin(1, curses.COLS, curses.LINES - 1, 0)
 		# quick, make a list of valid commands
 		commands = [c.names[-1] + c.params * ' ' for c in s.Cmd.list]
-		s.i = InputMethod(s.iw, '? ', '.gcode', s.huhmessage, commands, s.resize, s.send_emergency)
+		s.i = InputMethod(s.iw, '? ', '.gcode', s.huhmessage, commands, s.d.scroll, s.resize, s.send_emergency)
 
 		# gsender state (when running)
 		s.gstate = None
