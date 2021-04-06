@@ -417,19 +417,14 @@ class Gcli:
 
 
 	def waitio(s, timeout):
-		input = False
 		(r,_,_) = select.select([s.ser,sys.stdin],[],[], timeout)
-		for f in r:
-			if f is s.ser:
-				d = s.ser.read(4096)
-				if len(d):
-					s.last_receive = time.monotonic()
-					s.outputprocess(d)
+		if s.ser in r:
+			d = s.ser.read(4096)
+			if len(d):
+				s.last_receive = time.monotonic()
+				s.outputprocess(d)
 
-			if f is sys.stdin:
-				input = True
-
-		if input or (timeout and len(r) == 0):
+		if sys.stdin in r or len(r) == 0:
 			s.i.process()
 
 		if len(s.recdata):
