@@ -5,7 +5,6 @@ import serial
 import os
 import sys
 import argparse
-import struct
 import time
 import select
 import curses
@@ -99,7 +98,7 @@ class InputMethod:
 			(_, visx) = s.iw.getyx()
 			s.iw.addstr(s.e[s.y][s.x:])
 		except curses.error:
-			if not visx:
+			if visx is None:
 				(_, visx) = s.iw.getyx()
 		s.visx = visx
 		s.iw.clrtoeol()
@@ -157,7 +156,6 @@ class InputMethod:
 			return s.choose_complete(tail, list)
 
 		return ''
-
 
 	# keyboard input
 	def process(s):
@@ -294,11 +292,8 @@ class DisplayBox:
 
 	def scroll(s, lines):
 		s.yoff += lines
-		if s.yoff < 0:
-			s.yoff = 0
-		if s.yoff > s.ymax:
-			s.yoff = s.ymax
-
+		s.yoff = s.yoff if s.yoff >= 0 else 0
+		s.yoff = s.yoff if s.yoff <= s.ymax else s.ymax
 		s.refresh()
 
 
@@ -336,7 +331,7 @@ class GCodeFile:
 
 
 	def __bool__(s):
-		return True if s.f else False
+		return bool(s.f)
 
 
 	def open(s, fn):
@@ -539,7 +534,7 @@ class Gcli:
 			return False
 
 
-	def start_gsender(s, gcode, flushint=True, msg='Sending G-Code'):
+	def start_gsender(s, gcode, flushint=True, msg=None):
 		if not gcode:
 			s.huhmessage('No ' + gcode.identity + ' file to (re)send')
 			return
@@ -548,10 +543,13 @@ class Gcli:
 		if s.header and s.header.next is gcode:
 			gcode = s.header
 
+		if msg is None:
+			msg = 'Sending G-Code: ' + gcode.identity
+
 		s.banner(msg)
 		# gcodesender state
-		gcode.reset()
 		s.gstate = { 'paused': False, 'waitok': False, 'gfile': gcode, 'line': 0, 'st': time.monotonic() }
+		gcode.reset()
 		s.flush_recdata()
 		s.i.set_prompt('! ')
 		s.action = s.gcodesender
@@ -653,7 +651,7 @@ class Gcli:
 		s.header = GCodeFile(s.args.header, 'header', s.gcode)
 		s.emergency = GCodeFile(s.args.emergency, 'emergency')
 		s.ser = serial.Serial(s.args.port, s.args.baud, timeout=0)
-
+		# a GCodeFile object for the once command (no file yet)
 		s.sendonce = GCodeFile(None, 'sendonce', cl=True)
 
 		# display window/pad class
@@ -661,7 +659,7 @@ class Gcli:
 
 		# input window and the input class to (mostly) handle it
 		s.iw = curses.newwin(1, curses.COLS, curses.LINES - 1, 0)
-		# quick, make a list of valid commands
+		# list of command-names that we tabcomplete
 		commands = [c.names[-1] + c.params * ' ' for c in s.Cmd.list]
 		s.i = InputMethod(s.iw, '? ', '.gcode', s.huhmessage, commands, s.d.scroll, s.resize, s.send_emergency)
 
