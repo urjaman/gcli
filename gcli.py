@@ -462,30 +462,32 @@ class Gcli:
 		if s.gstate['waitok']:
 			return False
 
-		try:
-			l = s.gstate['gfile'].readline()
-		except ValueError:
-			s.banner('Binary data in G-Code File - Aborting Transmit')
-			return True
-
-		if l == '':
-			s.gstate['gfile'] = s.gstate['gfile'].next
-			if s.gstate['gfile']:
-				s.infomessage(s.gstate['gfile'].identity + ' =')
-				s.gstate['gfile'].reset()
-				return False
-			else:
-				s.banner('Sent {} lines of G-Code in {:.3f} seconds'
-					.format(s.gstate['line'], time.monotonic() - s.gstate['st']))
+		while True:
+			try:
+				l = s.gstate['gfile'].readline()
+			except ValueError:
+				s.banner('Binary data in G-Code File - Aborting Transmit')
 				return True
 
-		l = l.rsplit(sep=';',maxsplit=1)[0].rstrip()
-		if len(l) == 0:
-			return False
+			if l == '':
+				s.gstate['gfile'] = s.gstate['gfile'].next
+				if s.gstate['gfile']:
+					s.infomessage(s.gstate['gfile'].identity + ' =')
+					s.gstate['gfile'].reset()
+					continue
+				else:
+					s.banner('Sent {} lines of G-Code in {:.3f} seconds'
+						.format(s.gstate['line'], time.monotonic() - s.gstate['st']))
+					return True
 
-		s.send_line(l)
-		s.gstate['waitok'] = True
-		s.gstate['line'] += 1
+			l = l.rsplit(sep=';',maxsplit=1)[0].rstrip()
+			if len(l) == 0:
+				continue
+
+			s.send_line(l)
+			s.gstate['waitok'] = True
+			s.gstate['line'] += 1
+			return False
 
 
 	def start_gsender(s, gcode, flushint=True, msg='Sending G-Code'):
@@ -640,6 +642,7 @@ class Gcli:
 					if s.action == s.bootwaiter:
 						s.start_gsender(s.gcode, False)
 						s.echo_attr |= curses.A_BOLD
+						continue
 					else:
 						s.action = None
 						s.gstate = None
