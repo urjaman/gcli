@@ -146,7 +146,7 @@ class InputMethod:
 			pass
 
 		if tail == '..':
-			dirs.append('../')
+			dirs.append(tail + os.path.sep)
 
 		for list in (special, dirs, other):
 			if len(list) == 0:
@@ -293,7 +293,7 @@ class GCodeFile:
 	def __init__(s, filename, identity, next=None, cl=False):
 		s.identity = identity
 		s.next = next
-		s.autoclose = cl;
+		s.autoclose = cl
 		s.f = open(filename) if filename else None
 
 
@@ -481,7 +481,7 @@ class Gcli:
 				return False
 			else:
 				s.banner('Sent {} lines of G-Code in {:.3f} seconds'
-						.format(s.gstate['line'], time.monotonic() - s.gstate['st']))
+					.format(s.gstate['line'], time.monotonic() - s.gstate['st']))
 				return True
 
 		l = l.rsplit(sep=';',maxsplit=1)[0].rstrip()
