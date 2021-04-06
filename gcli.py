@@ -534,14 +534,8 @@ class Gcli:
 	def cmd_help(s):
 		s.infomessage('Command list:')
 		for c in s.Cmd.list:
-			str = ''
-			for n in c.names:
-				if str:
-					str += ' / '
-				str += n
-			str += ': '
-			str += c.help
-			s.infomessage(str)
+			s.infomessage(' / '.join(c.names) + ': ' + c.help)
+
 		s.infomessage('Capitalized commands are sent to the remote device.')
 
 
