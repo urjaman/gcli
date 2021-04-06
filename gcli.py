@@ -20,6 +20,7 @@ parser.add_argument("-F", "--footer", metavar='footer.gcode', help="always send 
 parser.add_argument("-E", "--emergency", metavar='emerg.gcode', help="send this if the Insert key is pressed (emergency stop)")
 args = parser.parse_args()
 
+
 def getukey(w):
 	k = w.getch()
 	if k == -1:
@@ -52,40 +53,9 @@ def getukey(w):
 	return chr(k)
 
 
-class GCodeFile:
+class InputMethod:
 	# i use "s" for self
 
-	def __init__(s, filename, identity, next=None, cl=False):
-		s.identity = identity
-		s.next = next
-		s.autoclose = cl;
-		s.f = open(filename) if filename else None
-
-	def __bool__(s):
-		return True if s.f else False
-
-	def open(s, fn):
-		try:
-			nf = open(fn)
-		except OSError:
-			return False
-		if s.f:
-			s.f.close()
-		s.f = nf
-		return True
-
-	def reset(s):
-		s.f.seek(0,0)
-
-	def readline(s):
-		l = s.f.readline()
-		if s.autoclose and l == '':
-			s.f.close()
-			s.f = None
-		return l
-
-
-class InputMethod:
 	def __init__(s, window, prompt, file_suffix, completion_msg, commands, resize=None, emergency=None):
 		s.iw = window
 		s.prompt = prompt
@@ -266,35 +236,129 @@ class InputMethod:
 		return r
 
 
+class DisplayBox:
+	def __init__(s, w, h, refresh):
+		s.w = w
+		s.h = h
+		s.refresh = refresh
+		s.lines = [[]]
+
+		s.p = curses.newpad(h, w)
+		s.p.scrollok(True)
+
+		s.lines_max = 150
+		s.lines_keep = 100
+
+
+	def refreshbox(s, y, x):
+		s.p.noutrefresh(0,0, y,x, y+s.h - 1, x+s.w - 1)
+
+
+	def redraw(s):
+		s.p.move(0,0)
+		s.p.erase()
+		for l in s.lines[-s.h:]:
+			for str, attr in l:
+				s.p.attron(attr)
+				s.p.addstr(str)
+				s.p.attroff(attr)
+		s.p.redrawwin()
+
+
+	def resize(s, w, h):
+		s.w = w
+		s.h = h
+		s.p.resize(h, w)
+		s.redraw()
+
+	# print(str, [attr=0], [str, attr], ...)
+	def print(s, *args):
+		for i in range(0,len(args),2):
+			str = args[i]
+			attr = args[i+1] if (i+1) < len(args) else 0
+
+			s.lines[-1].append( (str, attr) )
+			if str[-1] == '\n':
+				s.lines.append([])
+				if len(s.lines) >= s.lines_max:
+					s.lines = s.lines[-s.lines_keep:]
+			s.p.attron(attr)
+			s.p.addstr(str)
+			s.p.attroff(attr)
+
+		s.refresh()
+
+
+class GCodeFile:
+	def __init__(s, filename, identity, next=None, cl=False):
+		s.identity = identity
+		s.next = next
+		s.autoclose = cl;
+		s.f = open(filename) if filename else None
+
+
+	def __bool__(s):
+		return True if s.f else False
+
+
+	def open(s, fn):
+		try:
+			nf = open(fn)
+		except OSError:
+			return False
+		if s.f:
+			s.f.close()
+		s.f = nf
+		return True
+
+
+	def reset(s):
+		s.f.seek(0,0)
+
+
+	def readline(s):
+		l = s.f.readline()
+		if s.autoclose and l == '':
+			s.f.close()
+			s.f = None
+		return l
+
+
 class Gcli:
 	def __init__(s, args):
 		s.args = args
 		s.bootwait = args.bootwait / 1000
 
 
-	def full_refresh(s):
-		s.dw.noutrefresh(0,0, 0,0, curses.LINES-2, curses.COLS - 1)
-		s.i.redraw()
-
-
-	def dw_refresh(s):
-		s.dw.noutrefresh(0,0, 0,0, curses.LINES-2, curses.COLS - 1)
+	def disp_refresh(s):
+		s.d.refreshbox(0, 0)
 		s.i.cursor_refresh()
 
 
 	def resize(s):
 		curses.update_lines_cols()
-		(dw_y,_) = s.dw.getyx()
-		max_ypos = curses.LINES - 2
-		if dw_y > max_ypos:
-			s.dw.scroll(dw_y - max_ypos)
-			s.dw.move(max_ypos, 0)
-		s.dw.resize(curses.LINES - 1, curses.COLS)
 		s.iw.mvwin(curses.LINES - 1, 0)
 		s.iw.resize(1, curses.COLS)
-		s.dw.redrawwin()
+		s.d.resize(curses.COLS, curses.LINES - 1)
 		s.iw.redrawwin()
-		s.full_refresh()
+		s.d.refreshbox(0, 0)
+		s.i.redraw()
+
+
+	def banner(s, str):
+		s.d.print('### ' + str + ' ###\n', s.banner_attr)
+
+
+	def huhmessage(s, str):
+		s.d.print('? ' + str + '\n', s.huh_attr)
+
+
+	def errmessage(s, str):
+		s.d.print('! ' + str + '\n', s.error_attr)
+
+
+	def infomessage(s, str):
+		s.d.print('= ' + str + '\n', s.info_attr)
 
 
 	def send_emergency(s):
@@ -303,13 +367,6 @@ class Gcli:
 			return
 		s.start_gsender(s.emergency, msg='Sending Emergency G-Code')
 		s.gcodesender() # send first line NOW
-
-
-	def banner(s, str):
-		s.dw.attron(s.banner_attr)
-		s.dw.addstr('### ' + str + ' ###\n')
-		s.dw.attroff(s.banner_attr)
-		s.dw_refresh()
 
 
 	def pause_gsender(s):
@@ -347,24 +404,15 @@ class Gcli:
 			if output.startswith(b'error'):
 				out_attr = s.error_attr
 
-			s.dw.attron(out_attr)
-			s.dw.addstr('< ' + outstr + '\n')
-			s.dw.attroff(out_attr)
+			s.d.print('< ' + outstr + '\n', out_attr)
 			if s.gstate and output.startswith(b'error'):
 				s.pause_gsender()
-
-		s.dw_refresh()
 
 
 	def flush_recdata(s):
 		if len(s.recdata):
 			d = s.recdata.decode('utf-8',errors='ignore')
-			s.dw.attron(s.echo_attr)
-			s.dw.addstr('< ' + d)
-			s.dw.attroff(s.echo_attr)
-			s.dw.attron(s.error_attr)
-			s.dw.addstr('|\n')
-			s.dw.attroff(s.error_attr)
+			s.d.print('< ' + d, s.echo_attr, '|\n', s.error_attr)
 			s.recdata = b''
 
 
@@ -405,8 +453,7 @@ class Gcli:
 	def send_line(s, l):
 		l += '\n'
 		s.ser.write(l.encode('utf-8'))
-		s.dw.addstr('> ' + l)
-		s.dw_refresh()
+		s.d.print('> ' + l)
 
 
 	def gcodesender(s):
@@ -464,25 +511,6 @@ class Gcli:
 		s.action = s.gcodesender
 		if flushint:
 			s.i.intr = None
-
-
-	def message(s, str, pfx, attr):
-		s.dw.attron(attr)
-		s.dw.addstr(pfx + str + '\n')
-		s.dw.attroff(attr)
-		s.dw_refresh()
-
-
-	def huhmessage(s, str):
-		s.message(str, '? ', s.huh_attr)
-
-
-	def errmessage(s, str):
-		s.message(str, '! ', s.error_attr)
-
-
-	def infomessage(s, str):
-		s.message(str, '= ', s.info_attr)
 
 
 	class Cmd:
@@ -588,15 +616,10 @@ class Gcli:
 
 		s.sendonce = GCodeFile(None, 'sendonce', cl=True)
 
-		# display window
-		# it is a pad to avoid curses resizing it on us and losing the
-		# latest (lowest) data when making a terminal smaller, other
-		# than that we use it just like a window at 0,0.
-		s.dw = curses.newpad(curses.LINES - 1, curses.COLS)
-		s.dw.scrollok(True)
+		# display window/pad class
+		s.d = DisplayBox(curses.COLS, curses.LINES - 1, s.disp_refresh)
 
 		# input window and the input class to (mostly) handle it
-
 		s.iw = curses.newwin(1, curses.COLS, curses.LINES - 1, 0)
 		# quick, make a list of valid commands
 		commands = []
