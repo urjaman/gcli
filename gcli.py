@@ -13,6 +13,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("port", help="serial port device")
 parser.add_argument("gcode", help="gcode file to transmit", nargs='?', default=None)
 parser.add_argument("-b", "--baud", type=int, default=115200, help="serial port baudrate")
+parser.add_argument("-P", "--parity", choices=['None','Even','Odd','Mark','Space'], default='None')
+parser.add_argument("-X", "--xonxoff", action='store_const', const=True, default=False)
+parser.add_argument("-S", "--stopbits", choices=['1','1.5','2'], default='1')
 parser.add_argument("-w", "--bootwait", metavar='MS',type=int, default=4000, help="milliseconds to wait for boot messages")
 parser.add_argument("-H", "--header", metavar='header.gcode', help="always send this file as a header before a gcode transmit")
 parser.add_argument("-F", "--footer", metavar='footer.gcode', help="always send this file as a footer after a gcode transmit")
@@ -645,12 +648,37 @@ class Gcli:
 			s.huh_attr = 0
 			s.info_attr = 0
 
+		partext = 'N'
+		parity = serial.PARITY_NONE
+		if s.args.parity == 'Even':
+			parity = serial.PARITY_EVEN
+			partext = 'E'
+		elif s.args.parity == 'Odd':
+			parity = serial.PARITY_ODD
+			partext = 'O'
+		elif s.args.parity == 'Mark':
+			parity = serial.PARITY_MARK
+			partext = 'M'
+		elif s.args.parity == 'Space':
+			parity = serial.PARITY_SPACE
+			partext = 'S'
+
+		stoptxt = '1'
+		stopbits = serial.STOPBITS_ONE
+		if s.args.stopbits == '1.5':
+			stopbits = serial.STOPBITS_ONE_POINT_FIVE
+			stoptxt = '1p5'
+		elif s.args.stopbits == '2':
+			stopbits = serial.STOPBITS_TWO
+			stoptxt = '2'
+
+
 		# Open things (files, serial)
 		s.footer = GCodeFile(s.args.footer, 'footer')
 		s.gcode = GCodeFile(s.args.gcode, 'gcode', s.footer)
 		s.header = GCodeFile(s.args.header, 'header', s.gcode)
 		s.emergency = GCodeFile(s.args.emergency, 'emergency')
-		s.ser = serial.Serial(s.args.port, s.args.baud, timeout=0)
+		s.ser = serial.Serial(s.args.port, s.args.baud, parity=parity, stopbits=stopbits, xonxoff=s.args.xonxoff, timeout=0)
 		# a GCodeFile object for the once command (no file yet)
 		s.sendonce = GCodeFile(None, 'sendonce', cl=True)
 
@@ -671,6 +699,10 @@ class Gcli:
 		s.last_receive = time.monotonic()
 		s.action = None
 		s.select_to = default_select_to = 0.5
+
+		
+
+		s.banner(f"Opened port {s.args.port} @ {s.args.baud} baud, {partext} parity, {stoptxt} stop bits, XonXoff:{str(s.args.xonxoff)}")
 
 		if s.gcode:
 			s.banner('Waiting for device boot')
