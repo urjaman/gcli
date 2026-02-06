@@ -177,6 +177,9 @@ class InputMethod:
 
 		e, x, y = s.e, s.x, s.y
 
+		if isinstance(k, int) and k == curses.KEY_BACKSPACE:
+			k = chr(8)
+
 		if isinstance(k, int): # Special keys
 			if k == curses.KEY_IC and s.emergency:
 				s.emergency()
