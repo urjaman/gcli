@@ -427,6 +427,11 @@ class Gcli:
             if output.startswith(b"error"):
                 out_attr = self.error_attr
 
+            if output.startswith(b"ok "):
+                if self.gstate and self.gstate["waitok"]:
+                    self.gstate["waitok"] = False
+                # print it out as usual
+
             self.d.print("< " + outstr + "\n", out_attr)
             if self.gstate and output.startswith(b"error"):
                 self.pause_gsender()
