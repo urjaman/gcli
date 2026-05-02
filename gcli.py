@@ -566,33 +566,33 @@ class Gcli:
     Cmd(("re", "resend"), lambda self: self.start_gsender(self.gcode), "Resend current g-code file from beginning.")
     Cmd(
         ("f", "file", "send"),
-        lambda s, cs: self.cmd_open(self.gcode, cs, "<filename.gcode>", True),
+        lambda self, cs: self.cmd_open(self.gcode, cs, "<filename.gcode>", True),
         params=1,
         h="open and send a g-code file by filename.",
     )
     Cmd(("e",), send_emergency, h="send the emergency g-code")
     Cmd(
         ("setemergency",),
-        lambda s, cs: self.cmd_open(self.emergency, cs, "<emergency.gcode>"),
+        lambda self, cs: self.cmd_open(self.emergency, cs, "<emergency.gcode>"),
         params=1,
         h="Set g-code file for emergency stop (Insert key or 'e' command)",
     )
     Cmd(
         ("setheader",),
-        lambda s, cs: self.cmd_open(self.header, cs, "<header.gcode>"),
+        lambda self, cs: self.cmd_open(self.header, cs, "<header.gcode>"),
         params=1,
         h="Set g-code file to be used as a header.",
     )
     Cmd(
         ("setfooter",),
-        lambda s, cs: self.cmd_open(self.footer, cs, "<footer.gcode>"),
+        lambda self, cs: self.cmd_open(self.footer, cs, "<footer.gcode>"),
         params=1,
         h="Set g-code file to be used as a footer.",
     )
     Cmd(("sf", "sendfooter"), lambda self: self.start_gsender(self.footer), "Send (only) the footer file.")
     Cmd(
         ("once",),
-        lambda s, cs: self.cmd_open(self.sendonce, cs, "<once.gcode>", True),
+        lambda self, cs: self.cmd_open(self.sendonce, cs, "<once.gcode>", True),
         params=1,
         h="send a gcode file by filename once - no header or footer.",
     )
